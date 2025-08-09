@@ -1,0 +1,95 @@
+name: Deploy Azure Resource Groups
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Environnement (dev, prod, staging)"
+        required: true
+        default: "dev"
+        type: choice
+        options:
+          - dev
+          - staging
+          - prod
+      region:
+        description: "Région Azure (ex: westeurope, northeurope)"
+        required: true
+        default: "westeurope"
+      prefix:
+        description: "Préfixe des noms de RG"
+        required: false
+        default: "rg"
+      criticality:
+        description: "Niveau de criticité"
+        required: false
+        default: "Medium"
+        type: choice
+        options:
+          - Low
+          - Medium
+          - High
+      owner_email:
+        description: "Email du propriétaire"
+        required: true
+        default: "devops@company.com"
+      enable_diagnostics:
+        description: "Activer les diagnostics pour production"
+        required: false
+        default: true
+        type: boolean
+
+env:
+  ARM_CLIENT_ID: ${{ secrets.ARM_CLIENT_ID }}
+  ARM_CLIENT_SECRET: ${{ secrets.ARM_CLIENT_SECRET }}
+  ARM_SUBSCRIPTION_ID: ${{ secrets.ARM_SUBSCRIPTION_ID }}
+  ARM_TENANT_ID: ${{ secrets.ARM_TENANT_ID }}
+
+jobs:
+  deploy-resource-groups:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Setup Azure CLI
+      uses: azure/login@v1
+      with:
+        client-id: ${{ secrets.ARM_CLIENT_ID }}
+        tenant-id: ${{ secrets.ARM_TENANT_ID }}
+        subscription-id: ${{ secrets.ARM_SUBSCRIPTION_ID }}
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y jq
+        curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+
+    - name: Generate Terraform configuration
+      run: |
+        chmod +x generate-azure-rg-with-diag.sh
+        ./generate-azure-rg-with-diag.sh \
+          -e "${{ inputs.environment }}" \
+          -r "${{ inputs.region }}" \
+          -p "${{ inputs.prefix }}" \
+          -c "${{ inputs.criticality }}" \
+          -o "${{ inputs.owner_email }}" \
+          ${{ inputs.enable_diagnostics && '' || '--no-diag' }}
+
+    - name: Initialize Terraform
+      run: terraform init
+
+    - name: Terraform Plan
+      run: terraform plan -out=tfplan
+
+    - name: Terraform Apply
+      run: terraform apply -auto-approve tfplan
+
+    - name: Upload generated files
+      uses: actions/upload-artifact@v3
+      with:
+        name: terraform-files
+        path: |
+          resource_groups_*.tf
+          terraform.tfvars
